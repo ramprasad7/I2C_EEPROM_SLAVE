@@ -1,5 +1,4 @@
 /*I2C EEPROM Slave Device Driver*/
-
 #include<linux/module.h>
 #include<linux/init.h>
 #include<linux/fs.h>
@@ -7,15 +6,20 @@
 #include<linux/kdev_t.h>
 #include<linux/cdev.h>
 #include<linux/kernel.h>
+#include<linux/string.h>
+#include<linux/delay.h>
+
 
 /*available i2c bus number*/
 #define I2C_BUS (1)
+/*Page size to write to eeprom*/
+#define SIZE 8
 /*eeprom ic address*/
 #define SLAVE_ADDRESS (0x50)
 /*our slave device name*/
 #define SLAVE_DEVICE_NAME "eeprom_slave"
 /*Kernel(EEPROM) Buffer Size*/
-#define MEM_SIZE 256
+#define MEM_SIZE 257  
 /*Kernel(EEPROM) Buffer*/
 char* eeprom_buffer;
 
@@ -29,6 +33,10 @@ static struct class* eeprom_class;
 static struct i2c_adapter* eeprom_adapter;
 /*I2C client structure*/
 static struct i2c_client* eeprom_client;
+
+/*write location*/
+char wl = '0';
+
 
 /*eeprom open function*/
 static int eeprom_open(struct inode* inode,struct file* file){
@@ -51,61 +59,135 @@ static int eeprom_release(struct inode* inode,struct file* file){
 /*eeprom read function*/
 static ssize_t eeprom_read(struct file* file,char* __user buf,size_t len,loff_t* off){
   int ret = 0;
-  printk("Read from EEPROM Slave..\n");
-
-  eeprom_buffer[0] = off[0];
-
-  i2c_master_send(eeprom_client,eeprom_buffer,1);
-
-  printk("EEPROM_BUFFER[0] = %d\n",eeprom_buffer[0]);
-  
-  ret = i2c_master_recv(eeprom_client,eeprom_buffer,len);
-
+  int last_bytes = 0;
+  int pos = 0;
+  char page_buffer[SIZE] ={0};
+  memset(eeprom_buffer,0x00,MEM_SIZE);
+  //location write here
+  page_buffer[0] = wl;
+  ret = i2c_master_send(eeprom_client,page_buffer,1);
   if(ret < 0){
-    pr_err("cannot read from eeprom:");
+    printk("Failed to write in Read\n");
     return -1;
   }
+  printk("Byte Write from read: %d\n",ret);
+  mdelay(5);
 
-  printk("Reading %d number of bytes\n",ret);
+  while(pos < len){
+    memset(page_buffer,0x00,SIZE);
+    if(len < SIZE){
+    ret = i2c_master_recv(eeprom_client,eeprom_buffer,len);
+    if(ret < 0){
+        pr_err("cannot read from eeprom:");
+        return -1;
+    }
+    printk("Page Byte Read Ret =  %d\n",ret);
+    goto copy_to_user;
+    }
+    ret = i2c_master_recv(eeprom_client,page_buffer,SIZE);
+    printk("from page_buffer: %s\n",page_buffer);
+    memcpy(eeprom_buffer+pos,page_buffer,SIZE);
+    if(ret < 0){
+      pr_err("failed to read 7 bytes\n");
+      return -1;
+    }
+    printk("Page byte read ret = %d\n",ret);
+    pos += SIZE;
+    last_bytes = len - pos;
+    wl += SIZE; 
+    if(last_bytes < SIZE){
+      memset(page_buffer,0x00,SIZE);
+      ret = i2c_master_recv(eeprom_client,page_buffer,last_bytes);
+      printk("from page_buffer: %s\n",page_buffer);
+      memcpy(eeprom_buffer+pos,page_buffer,last_bytes);
+      printk("Last bytes read ret = %d\n",ret);
+      if(ret<0){
+        pr_err("failed to read last bytes\n");
+        return -1;
+      }
+      goto copy_to_user;
+    } 
+  }
 
+copy_to_user:
+  printk("Reading: %s\n",eeprom_buffer);
   if(copy_to_user(buf,eeprom_buffer,len) > 0){
     pr_err("Couldn't read all the bytes to user\n");
     return -1;
-  }
-  printk("Reading: %s\n",eeprom_buffer);
-
-  return ret;
+  }  
+  return len;
 }
 
 /*eeprom write function*/
 static ssize_t eeprom_write(struct file* file,const char* __user buf,size_t len,loff_t* off){
   int ret=0;
+  int pos=0;
+  int last_bytes=0;
+
+  char page_buffer[SIZE+1] = {0};
+
+  memset(eeprom_buffer,0x00,MEM_SIZE);
+  
   printk("Writing to EEPROM Slave..\n");
-
-  eeprom_buffer[0] = off[0];
-  printk("EEPROM_BUFFER[0] = %d\n",eeprom_buffer[0]);
   
-  ret = i2c_master_send(eeprom_client,eeprom_buffer,1);
-  printk("wrote %d number of bytes to eeprom\n",ret);
- 
-  if(copy_from_user(eeprom_buffer + 1,buf,len) > 0){
-    pr_err("couldn't copy all the bytes from user\n");
-    return -1;
-  }
-  printk("Writing: %s\n",buf);
-
-  ret = i2c_master_send(eeprom_client,eeprom_buffer,len+1);
-  
-  if(ret < 0){
-    pr_err("cannot write to eeprom\n");
+  if(copy_from_user(eeprom_buffer,buf,len) > 0){
+    pr_err("failed to write\n");
     return -1;
   }
 
-  printk("Writing %d number of bytes\n",ret);
+  printk("Writing: %s\n",eeprom_buffer);
 
-  return ret;
+  if(len < SIZE){
+    page_buffer[0] = wl;
+    memcpy((page_buffer+1),eeprom_buffer,len);
+    printk("page_buf: %s\n",page_buffer);
+    ret = i2c_master_send(eeprom_client,page_buffer,len+1); 
+    if(ret < 0){
+      pr_err("cannot write to eeprom\n");
+      return -1;
+    }
+    printk("Bytes Write Ret = %d\n",ret);
+    return ret;
+  }
+  while(pos < len){
+    memset(page_buffer,0x00,SIZE+1);
+    page_buffer[0] = wl;
+    memcpy(page_buffer + 1,eeprom_buffer+pos,SIZE);
+    printk("page_buf: %s\n",page_buffer);
+    ret = i2c_master_send(eeprom_client,page_buffer,SIZE+1);
+    mdelay(5);
+    if(ret < 0){
+      pr_err("7 Byte Write failed\n");
+      return -1;
+    } 
+    printk("8 Byte Write Ret = %d\n",ret);
+    pos += SIZE;
+    wl += SIZE;
+    last_bytes = len - pos;
+    printk("last_bytes: %d\n",last_bytes);
+    if(last_bytes < SIZE){
+      memset(page_buffer,0x00,SIZE);
+      page_buffer[0] = wl;
+      memcpy(page_buffer + 1,eeprom_buffer+pos,last_bytes);
+      printk("page_buf: %s\n",page_buffer);
+      ret = i2c_master_send(eeprom_client,page_buffer,last_bytes+1);
+      printk("Last Byte Write Ret = %d\n",ret);
+      if(ret < 0){
+        pr_err("failed to write k bytes\n");
+        return -1;
+      }
+      return len;
+    }
+  }
+  return len;
 }
 
+
+loff_t eeprom_llseek(struct file *file, loff_t off, int whence){
+  wl = (char)off;
+  printk("Given Starting location = %d\n",wl);
+  return off;
+}
 
 /*eeprom file operations structure*/
 static struct file_operations fops = {
@@ -113,6 +195,7 @@ static struct file_operations fops = {
   .open = eeprom_open,
   .read = eeprom_read,
   .write = eeprom_write,
+  .llseek = eeprom_llseek,
   .release = eeprom_release,
 };
 
@@ -208,6 +291,7 @@ static int __init eeprom_init(void){
   } 
 
   i2c_add_driver(&eeprom_driver);
+
   printk("I2C EEPROM Salve Driver loaded successsfully\n");
   return 0;
 }
