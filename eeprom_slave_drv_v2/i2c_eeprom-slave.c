@@ -342,4 +342,4 @@ module_exit(eeprom_cleanup);
 MODULE_AUTHOR("Ram");
 MODULE_LICENSE("GPL");
 MODULE_DESCRIPTION("A simple I2C EEPROM Slave Device Driver");
-MODULE_VERSION("1.0");
+MODULE_VERSION("2.0");
