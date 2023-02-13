@@ -30,6 +30,8 @@ int main(int argc, char* argv[]){
         perror("Failed Open");
         return -1;
     }
+
+
     if(lseek(fd,off,SEEK_SET)  == -1){
         perror("Failed seek");
         return -1;
@@ -39,21 +41,9 @@ int main(int argc, char* argv[]){
         perror("Failed to Read");
         return -1;
     } 
+
     printf("Read succesfully\n");
-    //printf("Read: %s\n",buf);
-#if 1
-    for(int i=0;i<1024;i++){
-        if(i%64 == 0){
-            printf("\n");
-        }
-        if(i%256 == 0){
-            printf("\n\n");
-        }   
-        printf("%c",buf[i]);
-    }
-    printf("\n");
-#endif
-    
+    printf("Read: %s\n",buf);
     close(fd);
 
     return 0;
